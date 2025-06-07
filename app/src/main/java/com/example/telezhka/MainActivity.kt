@@ -72,11 +72,35 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    ChatScreen(messages = messages, onSendMessage = { msg -> sendMessageToAll(msg) })
+                    ChatScreen(messages = messages,
+                        onSendMessage = { msg -> sendMessageToAll(msg) },
+                        onManualConnect = { ip, port -> connectManually(ip, port) })
                 }
             }
         }
     }
+
+    private fun connectManually(ip: String, port: Int) {
+        Thread {
+            try {
+                val socket = java.net.Socket(ip, port)
+                synchronized(clientSockets) {
+                    clientSockets.add(socket)
+                }
+                runOnUiThread {
+                    messages.add("✅ Подключено к $ip:$port")
+                }
+                listenForMessages(socket)
+            } catch (e: IOException) {
+                Log.e("ManualConnect", "Ошибка подключения к $ip:$port", e)
+                runOnUiThread {
+                    messages.add("❌ Не удалось подключиться к $ip:$port")
+                }
+            }
+        }.start()
+    }
+
+
     private fun registerService(port: Int) {
         val serviceInfo = NsdServiceInfo().apply {
             serviceName = this@MainActivity.serviceName
@@ -190,11 +214,12 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun ChatScreen(messages: List<String>, onSendMessage: (String) -> Unit) {
+fun ChatScreen(messages: List<String>, onSendMessage: (String) -> Unit, onManualConnect: (String, Int) -> Unit) {
     var message by remember { mutableStateOf("") }
+    var ipAddress by remember { mutableStateOf("") }
+    var portText by remember { mutableStateOf("") }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Фон с масштабированием Crop
         Image(
             painter = painterResource(id = R.drawable.background),
             contentDescription = null,
@@ -235,6 +260,37 @@ fun ChatScreen(messages: List<String>, onSendMessage: (String) -> Unit) {
                 }
             }
 
+            // Поля IP и порт + кнопка "Подключиться"
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = ipAddress,
+                    onValueChange = { ipAddress = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("IP-адрес") }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                OutlinedTextField(
+                    value = portText,
+                    onValueChange = { portText = it },
+                    modifier = Modifier.width(100.dp),
+                    placeholder = { Text("Порт") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(onClick = {
+                    val port = portText.toIntOrNull()
+                    if (ipAddress.isNotBlank() && port != null) {
+                        onManualConnect(ipAddress, port)
+                    }
+                }) {
+                    Text("Подключиться")
+                }
+            }
+
+            // Поле для ввода и отправки сообщения
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -267,10 +323,15 @@ fun ChatScreen(messages: List<String>, onSendMessage: (String) -> Unit) {
     }
 }
 
+
 @Preview(showBackground = true)
 @Composable
 fun ChatPreview() {
     TelezhkaTheme {
-        ChatScreen(messages = listOf("Привет!", "Как дела?"), onSendMessage = {})
+        ChatScreen(
+            messages = listOf("Привет!", "Как дела?"),
+            onSendMessage = {},
+            onManualConnect = { _, _ -> }
+        )
     }
 }
