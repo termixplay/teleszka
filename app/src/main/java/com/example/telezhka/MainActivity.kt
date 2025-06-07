@@ -43,23 +43,18 @@ class MainActivity : ComponentActivity() {
         // Инициализация NSD
         nsdManager = getSystemService(Context.NSD_SERVICE) as NsdManager
 
-        // 🧠 Запускаем сервер в отдельном потоке
+        // Подключение к серверу на хосте по 10.0.2.2 и порту 12345
         Thread {
             try {
-                serverSocket = ServerSocket(0) // 0 — выбрать свободный порт
-                serverPort = serverSocket.localPort
-                Log.d("Socket", "Сервер запущен на порту $serverPort")
-
-                // Регистрируем сервис в NSD с этим портом
-                registerService(serverPort)
-
-                while (true) {
-                    val client = serverSocket.accept()
-                    Log.d("Socket", "Новое подключение от: ${client.inetAddress.hostAddress}")
-                    // Тут можно читать/писать в сокет
+                val host = "10.0.2.2"
+                val port = 12345
+                val socket = java.net.Socket(host, port)
+                synchronized(clientSockets) {
+                    clientSockets.add(socket)
                 }
+                listenForMessages(socket)
             } catch (e: IOException) {
-                Log.e("Socket", "Ошибка при запуске сервера", e)
+                Log.e("Socket", "Ошибка подключения к хост-серверу", e)
             }
         }.start()
 
