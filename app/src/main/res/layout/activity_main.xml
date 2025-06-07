@@ -1,0 +1,39 @@
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <!-- Лог сообщений -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="619dp"
+        android:layout_weight="1">
+
+        <TextView
+            android:id="@+id/chatLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="16sp" />
+    </ScrollView>
+
+    <!-- Поле ввода и кнопка -->
+    <EditText
+        android:id="@+id/messageInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Введите сообщение"
+        android:textSize="16sp"/>
+
+    <ImageButton
+        android:id="@+id/sendButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:src="@drawable/send_icon"
+        android:contentDescription="Отправить сообщение"
+        android:background="@android:color/transparent"
+        android:padding="8dp"
+        />
+
+</LinearLayout>

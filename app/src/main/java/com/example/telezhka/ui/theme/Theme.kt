@@ -10,6 +10,27 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import com.example.telezhka.R
+import androidx.compose.material3.Typography
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+
+val MyFontFamily = FontFamily(
+    Font(R.font.myfont)  // имя файла без расширения
+)
+
+val MyTypography = Typography(
+    bodyLarge = TextStyle(
+        fontFamily = MyFontFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 16.sp
+    )
+)
+
+
 
 private val DarkColorScheme = darkColorScheme(
     primary = Purple80,
@@ -52,7 +73,7 @@ fun TelezhkaTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = Typography,
+        typography = MyTypography,
         content = content
     )
 }
