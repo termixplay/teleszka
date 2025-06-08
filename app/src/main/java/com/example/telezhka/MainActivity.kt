@@ -28,7 +28,6 @@ import com.example.telezhka.ui.theme.TelezhkaTheme
 import java.io.IOException
 import java.net.ServerSocket
 
-
 class MainActivity : ComponentActivity() {
     private lateinit var nsdManager: NsdManager
     private val serviceName = "TelezhkaChat"
@@ -38,32 +37,14 @@ class MainActivity : ComponentActivity() {
     private val clientSockets = mutableListOf<java.net.Socket>() // список клиентских сокетов (устройств, к которым подключаемся)
     val messages = mutableStateListOf<String>()
 
+    private var nickname by mutableStateOf("") // Никнейм пользователя
+    private var isNicknameSet by mutableStateOf(false) // Флаг, выбран ли ник
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Инициализация NSD
         nsdManager = getSystemService(Context.NSD_SERVICE) as NsdManager
 
-        // 🧠 Запускаем сервер в отдельном потоке
-        Thread {
-            try {
-                serverSocket = ServerSocket(0) // 0 — выбрать свободный порт
-                serverPort = serverSocket.localPort
-                Log.d("Socket", "Сервер запущен на порту $serverPort")
-
-                // Регистрируем сервис в NSD с этим портом
-                registerService(serverPort)
-
-                while (true) {
-                    val client = serverSocket.accept()
-                    Log.d("Socket", "Новое подключение от: ${client.inetAddress.hostAddress}")
-                    // Тут можно читать/писать в сокет
-                }
-            } catch (e: IOException) {
-                Log.e("Socket", "Ошибка при запуске сервера", e)
-            }
-        }.start()
-
-        discoverServices()
+        // Изначально серверное подключение и NSD не запускаем — запускаем после ввода ника
 
         enableEdgeToEdge()
         setContent {
@@ -72,11 +53,41 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    ChatScreen(messages = messages, onSendMessage = { msg -> sendMessageToAll(msg) })
+                    if (!isNicknameSet) {
+                        NicknameScreen(onNicknameSet = { nick ->
+                            nickname = nick
+                            isNicknameSet = true
+
+                            // После ввода ника запускаем сервер и NSD
+                            startNetworking()
+                        })
+                    } else {
+                        ChatScreen(messages = messages, onSendMessage = { msg -> sendMessageToAll(msg) })
+                    }
                 }
             }
         }
     }
+
+    private fun startNetworking() {
+        // Запускаем подключение к серверу и NSD-поиск
+        Thread {
+            try {
+                val host = "10.0.2.2"
+                val port = 12345
+                val socket = java.net.Socket(host, port)
+                synchronized(clientSockets) {
+                    clientSockets.add(socket)
+                }
+                listenForMessages(socket)
+            } catch (e: IOException) {
+                Log.e("Socket", "Ошибка подключения к хост-серверу", e)
+            }
+        }.start()
+
+        discoverServices()
+    }
+
     private fun registerService(port: Int) {
         val serviceInfo = NsdServiceInfo().apply {
             serviceName = this@MainActivity.serviceName
@@ -88,7 +99,6 @@ class MainActivity : ComponentActivity() {
                 override fun onServiceRegistered(NsdServiceInfo: NsdServiceInfo) {
                     Log.d("NSD", "Сервис зарегистрирован: ${NsdServiceInfo.serviceName}")
                 }
-
                 override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
                 override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) {}
                 override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
@@ -97,7 +107,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun _addIncomingMessage(message: String) {
-        messages.add("Друг: $message")
+        messages.add(message)
     }
 
     private fun listenForMessages(socket: java.net.Socket) {
@@ -107,7 +117,7 @@ class MainActivity : ComponentActivity() {
                 val line = reader.readLine() ?: break
                 Log.d("Socket", "Получено сообщение: $line")
                 runOnUiThread {
-                    // Добавим сообщение в UI
+                    // Добавим сообщение в UI (предполагается, что отправитель уже указан в сообщении)
                     _addIncomingMessage(line)
                 }
             }
@@ -122,6 +132,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun sendMessageToAll(message: String) {
+        val fullMessage = "$nickname: $message"
+
         // Добавляем своё сообщение в UI
         messages.add("Я: $message")
 
@@ -134,7 +146,7 @@ class MainActivity : ComponentActivity() {
             for (socket in socketsCopy) {
                 try {
                     val writer = socket.getOutputStream().bufferedWriter()
-                    writer.write(message)
+                    writer.write(fullMessage)
                     writer.newLine()
                     writer.flush()
                 } catch (e: IOException) {
@@ -185,8 +197,41 @@ class MainActivity : ComponentActivity() {
             }
         )
     }
+}
 
+@Composable
+fun NicknameScreen(onNicknameSet: (String) -> Unit) {
+    var nickname by remember { mutableStateOf("") }
+    val isButtonEnabled = nickname.isNotBlank()
 
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .padding(16.dp)
+                .background(MaterialTheme.colorScheme.surface, shape = MaterialTheme.shapes.medium)
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(text = "Введите никнейм", style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedTextField(
+                value = nickname,
+                onValueChange = { nickname = it },
+                placeholder = { Text("Никнейм") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(
+                onClick = { onNicknameSet(nickname.trim()) },
+                enabled = isButtonEnabled,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("ОК")
+            }
+        }
+    }
 }
 
 @Composable
@@ -194,7 +239,6 @@ fun ChatScreen(messages: List<String>, onSendMessage: (String) -> Unit) {
     var message by remember { mutableStateOf("") }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Фон с масштабированием Crop
         Image(
             painter = painterResource(id = R.drawable.background),
             contentDescription = null,
