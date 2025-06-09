@@ -1,5 +1,15 @@
 package com.example.telezhka
 
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.asImageBitmap
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
@@ -9,7 +19,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,11 +31,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.telezhka.ui.theme.TelezhkaTheme
 import java.io.IOException
 import java.net.ServerSocket
+import java.net.Socket
 
 class MainActivity : ComponentActivity() {
     private lateinit var nsdManager: NsdManager
@@ -34,17 +43,20 @@ class MainActivity : ComponentActivity() {
     private val serviceType = "_telezhka._tcp."
     private lateinit var serverSocket: ServerSocket
     private var serverPort: Int = 0
-    private val clientSockets = mutableListOf<java.net.Socket>() // список клиентских сокетов (устройств, к которым подключаемся)
-    val messages = mutableStateListOf<String>()
+    private val clientSockets = mutableListOf<Socket>()
+    val messages = mutableStateListOf<ChatMessage>()
 
-    private var nickname by mutableStateOf("") // Никнейм пользователя
-    private var isNicknameSet by mutableStateOf(false) // Флаг, выбран ли ник
+    private var nickname by mutableStateOf("")
+    private var isNicknameSet by mutableStateOf(false)
+
+    sealed class ChatMessage {
+        data class Text(val text: String) : ChatMessage()
+        data class Image(val bytes: ByteArray) : ChatMessage()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         nsdManager = getSystemService(Context.NSD_SERVICE) as NsdManager
-
-        // Изначально серверное подключение и NSD не запускаем — запускаем после ввода ника
 
         enableEdgeToEdge()
         setContent {
@@ -57,12 +69,14 @@ class MainActivity : ComponentActivity() {
                         NicknameScreen(onNicknameSet = { nick ->
                             nickname = nick
                             isNicknameSet = true
-
-                            // После ввода ника запускаем сервер и NSD
                             startNetworking()
                         })
                     } else {
-                        ChatScreen(messages = messages, onSendMessage = { msg -> sendMessageToAll(msg) })
+                        ChatScreen(
+                            messages = messages,
+                            onSendMessage = { msg -> sendMessageToAll(msg) },
+                            onSendImage = { bytes -> sendImageToAll(bytes) }
+                        )
                     }
                 }
             }
@@ -70,11 +84,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startNetworking() {
-        // Запускаем подключение к серверу и NSD-поиск
         Thread {
             try {
-                val host = "10.0.2.2"
-                val port = 12345
+                val host = "10.0.2.2"  // или IP нужного сервера
+                val port = 12345       // нужный порт
                 val socket = java.net.Socket(host, port)
                 synchronized(clientSockets) {
                     clientSockets.add(socket)
@@ -84,8 +97,6 @@ class MainActivity : ComponentActivity() {
                 Log.e("Socket", "Ошибка подключения к хост-серверу", e)
             }
         }.start()
-
-        discoverServices()
     }
 
     private fun registerService(port: Int) {
@@ -94,227 +105,313 @@ class MainActivity : ComponentActivity() {
             serviceType = this@MainActivity.serviceType
             this.port = port
         }
-        nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD,
-            object : NsdManager.RegistrationListener {
-                override fun onServiceRegistered(NsdServiceInfo: NsdServiceInfo) {
-                    Log.d("NSD", "Сервис зарегистрирован: ${NsdServiceInfo.serviceName}")
-                }
-                override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
-                override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) {}
-                override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+        nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, object : NsdManager.RegistrationListener {
+            override fun onServiceRegistered(info: NsdServiceInfo) {
+                Log.d("NSD", "Service registered: ${info.serviceName}")
             }
-        )
+            override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+            override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) {}
+            override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+        })
     }
 
-    private fun _addIncomingMessage(message: String) {
-        messages.add(message)
-    }
-
-    private fun listenForMessages(socket: java.net.Socket) {
-        try {
-            val reader = socket.getInputStream().bufferedReader()
-            while (true) {
-                val line = reader.readLine() ?: break
-                Log.d("Socket", "Получено сообщение: $line")
-                runOnUiThread {
-                    // Добавим сообщение в UI (предполагается, что отправитель уже указан в сообщении)
-                    _addIncomingMessage(line)
-                }
-            }
-        } catch (e: IOException) {
-            Log.e("Socket", "Ошибка чтения сообщения", e)
-        } finally {
-            synchronized(clientSockets) {
-                clientSockets.remove(socket)
-            }
-            socket.close()
-        }
-    }
-
-    private fun sendMessageToAll(message: String) {
-        val fullMessage = "$nickname: $message"
-
-        // Добавляем своё сообщение в UI
-        messages.add("Я: $message")
-
-        val socketsCopy: List<java.net.Socket>
-        synchronized(clientSockets) {
-            socketsCopy = clientSockets.toList()
-        }
-
+    private fun listenForMessages(socket: Socket) {
         Thread {
-            for (socket in socketsCopy) {
-                try {
-                    val writer = socket.getOutputStream().bufferedWriter()
-                    writer.write(fullMessage)
-                    writer.newLine()
-                    writer.flush()
-                } catch (e: IOException) {
-                    Log.e("Socket", "Ошибка отправки сообщения", e)
+            try {
+                val input = socket.getInputStream()
+
+                while (!socket.isClosed) {
+                    val header = readHeader(input) ?: break
+
+                    val type = header["TYPE"] ?: "TEXT"
+                    val length = header["LENGTH"]?.toIntOrNull() ?: 0
+                    if (length <= 0) continue
+
+                    val data = ByteArray(length)
+                    var bytesRead = 0
+                    while (bytesRead < length) {
+                        val read = input.read(data, bytesRead, length - bytesRead)
+                        if (read == -1) break
+                        bytesRead += read
+                    }
+                    if (bytesRead != length) break
+
+                    if (type == "TEXT") {
+                        val msg = String(data, Charsets.UTF_8)
+                        runOnUiThread { messages.add(ChatMessage.Text(msg)) }
+                    } else if (type == "IMAGE") {
+                        runOnUiThread { messages.add(ChatMessage.Image(data)) }
+                    }
                 }
+            } catch (e: IOException) {
+                Log.e("Socket", "Read message error", e)
+            } finally {
+                synchronized(clientSockets) { clientSockets.remove(socket) }
+                try { socket.close() } catch (ignored: IOException) {}
             }
         }.start()
     }
 
-    private fun discoverServices() {
-        nsdManager.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD,
-            object : NsdManager.DiscoveryListener {
-                override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                    Log.d("NSD", "Найден сервис: ${serviceInfo.serviceName}")
+    private fun readHeader(input: java.io.InputStream): Map<String, String>? {
+        val header = mutableMapOf<String, String>()
+        val buffer = StringBuilder()
 
-                    if (serviceInfo.serviceName != serviceName) { // не подключаемся к своему сервису
-                        nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-                            override fun onServiceResolved(resolvedServiceInfo: NsdServiceInfo) {
-                                val host = resolvedServiceInfo.host.hostAddress
-                                val port = resolvedServiceInfo.port
-                                Log.d("NSD", "Resolved сервис на $host:$port")
+        var lastTwoChars = ""
+        while (true) {
+            val ch = input.read()
+            if (ch == -1) return null
+            val c = ch.toChar()
+            buffer.append(c)
 
-                                Thread {
-                                    try {
-                                        val socket = java.net.Socket(host, port)
-                                        synchronized(clientSockets) {
-                                            clientSockets.add(socket)
-                                        }
-                                        listenForMessages(socket)
-                                    } catch (e: IOException) {
-                                        Log.e("Socket", "Ошибка подключения к серверу", e)
-                                    }
-                                }.start()
-                            }
-
-                            override fun onResolveFailed(serviceInfo: NsdServiceInfo?, errorCode: Int) {
-                                Log.e("NSD", "Ошибка разрешения сервиса: $errorCode")
-                            }
-                        })
-                    }
-                }
-
-                override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {}
-                override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
-                override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
-                override fun onDiscoveryStarted(serviceType: String) {}
-                override fun onDiscoveryStopped(serviceType: String) {}
+            lastTwoChars += c
+            if (lastTwoChars.length > 2) {
+                lastTwoChars = lastTwoChars.takeLast(2)
             }
-        )
+            if (lastTwoChars == "\n\n") break
+        }
+
+        val headerText = buffer.toString().trim()
+        val lines = headerText.split("\n")
+        for (line in lines) {
+            val parts = line.split(":", limit = 2)
+            if (parts.size == 2) {
+                header[parts[0].trim()] = parts[1].trim()
+            }
+        }
+
+        return header
     }
-}
 
-@Composable
-fun NicknameScreen(onNicknameSet: (String) -> Unit) {
-    var nickname by remember { mutableStateOf("") }
-    val isButtonEnabled = nickname.isNotBlank()
+    private fun sendMessageToAll(message: String) {
+        val socketsCopy = synchronized(clientSockets) { clientSockets.toList() }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+        Thread {
+            for (socket in socketsCopy) {
+                try {
+                    val output = socket.getOutputStream()
+                    val writer = output.bufferedWriter()
+                    val bytes = message.toByteArray(Charsets.UTF_8)
+                    writer.write("TYPE:TEXT\nLENGTH:${bytes.size}\n\n")
+                    writer.flush()
+                    output.write(bytes)
+                    output.flush()
+                } catch (e: IOException) {
+                    Log.e("Socket", "Send text error", e)
+                }
+            }
+        }.start()
+
+        messages.add(ChatMessage.Text(message))
+    }
+
+    private fun sendImageToAll(imageBytes: ByteArray) {
+        val socketsCopy = synchronized(clientSockets) { clientSockets.toList() }
+
+        Thread {
+            for (socket in socketsCopy) {
+                try {
+                    val output = socket.getOutputStream()
+                    val writer = output.bufferedWriter()
+                    writer.write("TYPE:IMAGE\nLENGTH:${imageBytes.size}\n\n")
+                    writer.flush()
+                    output.write(imageBytes)
+                    output.flush()
+                } catch (e: IOException) {
+                    Log.e("Socket", "Send image error", e)
+                }
+            }
+        }.start()
+
+        messages.add(ChatMessage.Image(imageBytes))
+    }
+
+    private fun discoverServices() {
+        nsdManager.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, object : NsdManager.DiscoveryListener {
+            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                if (serviceInfo.serviceName != serviceName) {
+                    nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                        override fun onServiceResolved(resolvedServiceInfo: NsdServiceInfo) {
+                            val host = resolvedServiceInfo.host.hostAddress
+                            val port = resolvedServiceInfo.port
+                            Thread {
+                                try {
+                                    val socket = Socket(host, port)
+                                    synchronized(clientSockets) { clientSockets.add(socket) }
+                                    listenForMessages(socket)
+                                } catch (e: IOException) {
+                                    Log.e("Socket", "Connect error", e)
+                                }
+                            }.start()
+                        }
+                        override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+                    })
+                }
+            }
+            override fun onServiceLost(serviceInfo: NsdServiceInfo) {}
+            override fun onDiscoveryStarted(serviceType: String) {}
+            override fun onDiscoveryStopped(serviceType: String) {}
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {}
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+        })
+    }
+
+    @Composable
+    fun NicknameScreen(onNicknameSet: (String) -> Unit) {
+        var text by remember { mutableStateOf("") }
         Column(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .padding(16.dp)
-                .background(MaterialTheme.colorScheme.surface, shape = MaterialTheme.shapes.medium)
-                .padding(24.dp),
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(text = "Введите никнейм", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(16.dp))
-            OutlinedTextField(
-                value = nickname,
-                onValueChange = { nickname = it },
+            Text("Введите никнейм", style = MaterialTheme.typography.headlineMedium)
+            Spacer(Modifier.height(16.dp))
+            TextField(
+                value = text,
+                onValueChange = { text = it },
                 placeholder = { Text("Никнейм") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
+                singleLine = true
             )
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(
-                onClick = { onNicknameSet(nickname.trim()) },
-                enabled = isButtonEnabled,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("ОК")
+            Spacer(Modifier.height(16.dp))
+            Button(enabled = text.isNotBlank(), onClick = { onNicknameSet(text.trim()) }) {
+                Text("Подтвердить")
             }
         }
     }
-}
 
-@Composable
-fun ChatScreen(messages: List<String>, onSendMessage: (String) -> Unit) {
-    var message by remember { mutableStateOf("") }
+    @Composable
+    fun ChatScreen(
+        messages: List<ChatMessage>,
+        onSendMessage: (String) -> Unit,
+        onSendImage: (ByteArray) -> Unit
+    ) {
+        var inputText by remember { mutableStateOf("") }
+        val context = LocalContext.current
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Image(
-            painter = painterResource(id = R.drawable.background),
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop
+        val launcher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.GetContent(),
+            onResult = { uri: Uri? ->
+                if (uri != null) {
+                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        val bytes = inputStream.readBytes()
+                        onSendImage(bytes)
+                    }
+                }
+            }
         )
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.SpaceBetween
+        Box(
+            modifier = Modifier.fillMaxSize()
         ) {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                reverseLayout = true
+            Image(
+                painter = painterResource(id = R.drawable.background),  // background.jpg должен быть в res/drawable под именем background.jpg
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(8.dp)
             ) {
-                items(messages.reversed()) { msg ->
-                    Box(
-                        modifier = Modifier
-                            .padding(8.dp)
-                            .background(
-                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
-                                shape = MaterialTheme.shapes.medium
-                            )
-                            .border(
-                                width = 1.dp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                                shape = MaterialTheme.shapes.medium
-                            )
-                            .padding(8.dp)
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    reverseLayout = true,
+                    verticalArrangement = Arrangement.Bottom
+                ) {
+                    items(messages.reversed()) { msg ->
+                        when (msg) {
+                            is ChatMessage.Text -> {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(4.dp)
+                                        .background(
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        .border(
+                                            width = 1.dp,
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        .padding(12.dp)
+                                )
+                                {
+                                    Text(
+                                        text = msg.text,
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
+                                }
+                            }
+                            is ChatMessage.Image -> {
+                                val bmp = android.graphics.BitmapFactory.decodeByteArray(msg.bytes, 0, msg.bytes.size)
+                                if (bmp != null) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(4.dp)
+                                            .background(
+                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                                                shape = RoundedCornerShape(12.dp)
+                                            )
+                                            .border(
+                                                width = 1.dp,
+                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                                                shape = RoundedCornerShape(12.dp)
+                                            )
+                                            .padding(12.dp)
+                                    ) {
+                                        Image(
+                                            bitmap = bmp.asImageBitmap(),
+                                            contentDescription = null,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            contentScale = ContentScale.Fit
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = inputText,
+                        onValueChange = { inputText = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Введите сообщение") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                        maxLines = 3
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(
+                        onClick = {
+                            if (inputText.isNotBlank()) {
+                                onSendMessage("$nickname: $inputText")
+                                inputText = ""
+                            }
+                        }
                     ) {
-                        Text(
-                            text = msg,
-                            color = MaterialTheme.colorScheme.onSurface
+                        Image(
+                            painter = painterResource(id = R.drawable.send_icon),
+                            contentDescription = "Send"
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(
+                        onClick = { launcher.launch("image/*") }
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.image_icon),
+                            contentDescription = "Select Image"
                         )
                     }
                 }
-            }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = message,
-                    onValueChange = { message = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Введите сообщение") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
-                )
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                IconButton(
-                    onClick = {
-                        if (message.isNotBlank()) {
-                            onSendMessage(message)
-                            message = ""
-                        }
-                    }
-                ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.send_icon),
-                        contentDescription = "Отправить сообщение"
-                    )
-                }
             }
         }
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun ChatPreview() {
-    TelezhkaTheme {
-        ChatScreen(messages = listOf("Привет!", "Как дела?"), onSendMessage = {})
     }
 }
