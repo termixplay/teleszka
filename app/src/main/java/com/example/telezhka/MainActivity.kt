@@ -322,52 +322,71 @@ class MainActivity : ComponentActivity() {
                     items(messages.reversed()) { msg ->
                         when (msg) {
                             is ChatMessage.Text -> {
-                                Box(
+                                val isOutgoing = msg.text.startsWith("$nickname: ")
+                                val displayText = if (isOutgoing) msg.text.removePrefix("$nickname: ").trimStart() else msg.text
+
+                                Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(4.dp)
-                                        .background(
-                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                                            shape = RoundedCornerShape(12.dp)
+                                        .padding(4.dp),
+                                    horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .background(
+                                                color = if (isOutgoing)
+                                                    Color(0x8032CD32)  // Полупрозрачный зелёный
+                                                else
+                                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                                                shape = RoundedCornerShape(12.dp)
+                                            )
+                                            .border(
+                                                width = 1.dp,
+                                                color = if (isOutgoing)
+                                                    Color(0x8032CD32)
+                                                else
+                                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                                                shape = RoundedCornerShape(12.dp)
+                                            )
+                                            .padding(12.dp)
+                                    ) {
+                                        Text(
+                                            text = displayText,
+                                            color = MaterialTheme.colorScheme.onBackground
                                         )
-                                        .border(
-                                            width = 1.dp,
-                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                                            shape = RoundedCornerShape(12.dp)
-                                        )
-                                        .padding(12.dp)
-                                )
-                                {
-                                    Text(
-                                        text = msg.text,
-                                        color = MaterialTheme.colorScheme.onBackground
-                                    )
+                                    }
                                 }
                             }
                             is ChatMessage.Image -> {
                                 val bmp = android.graphics.BitmapFactory.decodeByteArray(msg.bytes, 0, msg.bytes.size)
                                 if (bmp != null) {
-                                    Box(
+                                    val isOutgoing = false // Можно реализовать аналогично, если нужно
+                                    Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .padding(4.dp)
-                                            .background(
-                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                                                shape = RoundedCornerShape(12.dp)
-                                            )
-                                            .border(
-                                                width = 1.dp,
-                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                                                shape = RoundedCornerShape(12.dp)
-                                            )
-                                            .padding(12.dp)
+                                            .padding(4.dp),
+                                        horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start
                                     ) {
-                                        Image(
-                                            bitmap = bmp.asImageBitmap(),
-                                            contentDescription = null,
-                                            modifier = Modifier.fillMaxWidth(),
-                                            contentScale = ContentScale.Fit
-                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .background(
+                                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                                                    shape = RoundedCornerShape(12.dp)
+                                                )
+                                                .border(
+                                                    width = 1.dp,
+                                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                                                    shape = RoundedCornerShape(12.dp)
+                                                )
+                                                .padding(12.dp)
+                                        ) {
+                                            Image(
+                                                bitmap = bmp.asImageBitmap(),
+                                                contentDescription = null,
+                                                modifier = Modifier.widthIn(max = 200.dp), // Ограничим ширину, чтобы не занимало весь экран
+                                                contentScale = ContentScale.Fit
+                                            )
+                                        }
                                     }
                                 }
                             }
